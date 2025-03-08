@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+geopandas
+sqlalchemy
+pymysql
+apscheduler
+websockets

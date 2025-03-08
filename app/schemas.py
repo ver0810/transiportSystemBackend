@@ -1,4 +1,5 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
+from sqlalchemy import JSON
 
 
 class UserBase(BaseModel):
@@ -20,3 +21,7 @@ class LoginUser(BaseModel):
 class UserInDB(UserBase):
     hashedPassword: str
 
+
+# 数据库存储路网信息模型
+class RoadNetworkRequest(BaseModel):
+    geom: str  # WKT 格式
