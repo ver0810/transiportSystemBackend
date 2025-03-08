@@ -1,5 +1,4 @@
-from fastapi import Depends, FastAPI, HTTPException, Query
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel import Session, create_engine
 
 
 # MariaDB 连接 URL
