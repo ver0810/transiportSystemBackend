@@ -43,8 +43,22 @@ app.add_middleware(
 # 注册路由
 @app.post("/user/register")
 def createNewUser(user: RegisterUser, db: Session = Depends(getSession)):
-    createUser(db, user)
-    return {"message": "User registered successfully"}
+    try:
+        result = createUser(db, user)
+        return {
+            "message": "User registered successfully", 
+            "username": result.username,
+            "id": result.id
+        }
+    except HTTPException as e:
+        # FastAPI会自动处理HTTPException
+        raise e
+    except Exception as e:
+        logging.error(f"注册用户时出现未知错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"服务器错误: {str(e)}"
+        )
 
 # 登录路由
 @app.post("/user/login")

@@ -63,8 +63,10 @@ class TrafficDataGenerator:
             
             # 根据道路等级设置基础流量和速度
             road_level = feature["properties"].get("level", random.randint(1, 5))
-            base_flow = (6 - road_level) * 500 + random.randint(-200, 200)
-            base_speed = (6 - road_level) * 10 + random.randint(5, 15)
+            # 降低基础流量，减少拥堵概率
+            base_flow = (6 - road_level) * 400 + random.randint(-200, 200)
+            # 提高基础速度
+            base_speed = (6 - road_level) * 12 + random.randint(8, 18)
             
             # 计算拥堵等级
             congestion_level = self._calculate_congestion_level(base_flow, base_speed)
@@ -114,12 +116,12 @@ class TrafficDataGenerator:
     
     def _calculate_congestion_level(self, flow: int, speed: float) -> int:
         """根据流量和速度计算拥堵等级"""
-        # 简单算法：流量越大，速度越低，拥堵等级越高
-        if speed > 50:
+        # 修改速度阈值，提高每个等级的速度标准，降低拥堵概率
+        if speed > 60:  # 原先是50
             return 1  # 畅通
-        elif speed > 30:
+        elif speed > 40:  # 原先是30
             return 2  # 轻度拥堵
-        elif speed > 15:
+        elif speed > 25:  # 原先是15
             return 3  # 中度拥堵
         else:
             return 4  # 严重拥堵
@@ -207,13 +209,13 @@ class TrafficDataGenerator:
         # 根据时间段调整流量
         time_factor = 1.0
         if 7 <= current_hour <= 9:  # 早高峰
-            time_factor = 1.5
+            time_factor = 1.3  # 原先是1.5，降低高峰期流量
         elif 17 <= current_hour <= 19:  # 晚高峰
-            time_factor = 1.8
+            time_factor = 1.5  # 原先是1.8，降低高峰期流量
         elif 23 <= current_hour or current_hour <= 5:  # 深夜
             time_factor = 0.3
         elif 10 <= current_hour <= 15:  # 工作时间
-            time_factor = 0.8
+            time_factor = 0.7  # 原先是0.8，略微降低
         
         for road_id, road_data in self.road_flow_data.items():
             # 添加随机波动
@@ -223,12 +225,12 @@ class TrafficDataGenerator:
             # 更新流量和速度
             new_flow = int(road_data["flow"] * (1 + flow_change) * time_factor)
             
-            # 流量与速度成反比
-            speed_factor = 1.0 - (new_flow / 5000) * 0.5  # 流量越大，速度越低
-            speed_factor = max(0.3, min(1.2, speed_factor))  # 限制在0.3-1.2之间
+            # 流量与速度成反比，降低流量对速度的影响
+            speed_factor = 1.0 - (new_flow / 6000) * 0.4  # 原先是5000和0.5，减轻流量对速度的影响
+            speed_factor = max(0.4, min(1.2, speed_factor))  # 提高最低速度因子，原先是0.3
             
             new_speed = road_data["speed"] * (1 + speed_change) * speed_factor
-            new_speed = max(5, min(120, new_speed))  # 限制速度范围
+            new_speed = max(10, min(120, new_speed))  # 提高最低速度，原先是5
             
             # 更新拥堵等级
             new_congestion_level = self._calculate_congestion_level(new_flow, new_speed)
