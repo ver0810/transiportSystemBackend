@@ -1,98 +1,63 @@
 import asyncio
-import pandas as pd
 import logging
-import time
-from services.websocket.manager import manager
-from services.road.simulatieFlow import simulate_flow
-from services.road.geoservice import generate_road_with_flow
-import random
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# 全局变量，存储任务状态
-flow_update_task = None
-is_running = False
+# 用于控制更新任务的变量
+_update_task: Optional[asyncio.Task] = None
+_is_running = False
+_update_interval = 5  # 默认60秒
 
-async def update_flow_data(interval_seconds: int = 5):
-    """
-    定时更新流量数据并通过 WebSocket 广播
+async def _update_loop():
+    """后台更新循环"""
+    global _is_running
     
-    Args:
-        interval_seconds: 更新间隔时间（秒）
-    """
-    global is_running
-    is_running = True
+    logger.info(f"流量更新任务已启动，间隔: {_update_interval}秒")
     
-    try:
-        while is_running:
-            start_time = time.time()
-            logger.info(f"Updating flow data at {time.strftime('%H:%M:%S')}")
+    while _is_running:
+        try:
+            # 这里只记录日志，实际更新由main.py中的periodic_data_update处理
+            logger.debug(f"服务更新间隔为: {_update_interval}秒")
+            await asyncio.sleep(_update_interval)
             
-            try:
-                # 获取原始数据
-                road_speed = pd.read_csv('public/road_speed.csv')
-                
-                # 如果没有 FLOW 列，先计算它
-                if 'FLOW' not in road_speed.columns:
-                    road_speed['FLOW'] = road_speed['GOLEN'] / road_speed['GOTIME']
-                
-                # 模拟新的流量数据
-                updated_road_speed = simulate_flow(road_speed)
-                
-                # 获取完整的道路网络数据（包含新的流量）
-                # 直接传递数据，避免文件 I/O 操作
-                updated_geo_data = generate_road_with_flow(updated_road_speed)
-                
-                # 转换为可序列化的格式
-                geo_data_dict = updated_geo_data.__geo_interface__
-                
-                # 添加时间戳
-                message = {
-                    "type": "flow_update",
-                    "timestamp": time.time(),
-                    "data": geo_data_dict
-                }
-                
-                # 广播到所有客户端
-                await manager.broadcast(message)
-                logger.info(f"Flow data broadcast to {len(manager.active_connections)} clients")
-                    
-            except Exception as e:
-                logger.error(f"Error updating flow data: {e}")
-            
-            # 计算实际需要睡眠的时间
-            elapsed = time.time() - start_time
-            sleep_time = max(0, interval_seconds - elapsed)
-            
-            await asyncio.sleep(sleep_time)
-    
-    finally:
-        is_running = False
-        logger.info("更新流量数据任务结束")
+        except Exception as e:
+            logger.error(f"更新循环出错: {e}")
+            await asyncio.sleep(5)  # 出错后等待5秒
 
-
-def start_flow_updates(interval_seconds: int = 5):
-    """启动流量数据更新任务"""
-    global flow_update_task, is_running
+def start_flow_updates(interval_seconds: int = 60):
+    """启动流量更新任务"""
+    global _update_task, _is_running, _update_interval
     
-    if flow_update_task is not None and not flow_update_task.done():
-        logger.warning("流量更新任务已经在运行")
+    if _is_running:
+        logger.info(f"更新任务已在运行中，更新间隔: {interval_seconds}秒")
+        _update_interval = interval_seconds
         return
     
-    logger.info(f"流量更新任务已经运行 {interval_seconds} 秒")
-    flow_update_task = asyncio.create_task(update_flow_data(interval_seconds))
-    return flow_update_task
-
+    _update_interval = interval_seconds
+    _is_running = True
+    _update_task = asyncio.create_task(_update_loop())
+    
+    logger.info(f"流量更新任务已启动，间隔: {interval_seconds}秒")
 
 def stop_flow_updates():
-    """停止流量数据更新任务"""
-    global flow_update_task, is_running
+    """停止流量更新任务"""
+    global _update_task, _is_running
     
-    if flow_update_task is None or flow_update_task.done():
-        logger.warning("No flow update task is running")
+    if not _is_running:
+        logger.info("流量更新任务未运行")
         return
     
-    logger.info("Stopping flow update task")
-    is_running = False
-    # 不要取消任务，让它自然结束
-    return flow_update_task
+    _is_running = False
+    if _update_task:
+        _update_task.cancel()
+        _update_task = None
+    
+    logger.info("流量更新任务已停止")
+
+def get_update_status():
+    """获取更新任务状态"""
+    return {
+        "is_running": _is_running,
+        "interval": _update_interval
+    }

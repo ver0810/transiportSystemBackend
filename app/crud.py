@@ -52,3 +52,37 @@ def createUser(db: Session, user: RegisterUser):
     db.commit()
     db.refresh(dbUser)
     return dbUser
+
+# 更新用户名
+def updateUsername(db: Session, current_username: str, new_username: str):
+    # 检查新用户名是否已存在
+    if getUserByUsername(db, new_username):
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    # 获取当前用户
+    user = getUserByUsername(db, current_username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # 更新用户名
+    user.username = new_username
+    db.commit()
+    db.refresh(user)
+    return user
+
+# 更新用户密码
+def updatePassword(db: Session, username: str, current_password: str, new_password: str):
+    # 获取用户
+    user = getUserByUsername(db, username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # 验证当前密码
+    if not verifyPassword(current_password, user.hashedPassword):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
+    
+    # 更新密码
+    user.hashedPassword = getHashedPassword(new_password)
+    db.commit()
+    db.refresh(user)
+    return user

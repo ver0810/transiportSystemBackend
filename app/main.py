@@ -1,10 +1,10 @@
 from sqlmodel import Session
 from datetime import timedelta
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends, FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, status, WebSocket, WebSocketDisconnect, BackgroundTasks
 from app.database import getSession
-from app.crud import createUser
-from app.schemas import LoginUser, RegisterUser
+from app.crud import createUser, updateUsername, updatePassword, getUserByUsername
+from app.schemas import LoginUser, PasswordUpdateRequest, RegisterUser, UsernameUpdateRequest
 from services.auth.login import authenticateUser
 from app.crud import ACCESS_TOKEN_EXPIRE_MINUTES, createAccessToken
 from services.websocket.flow_update import start_flow_updates, stop_flow_updates
@@ -39,6 +39,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 全局变量用于控制定时更新任务
+update_interval = 60  # 默认10秒更新一次
+background_task = None
+is_updating = False
 
 # 注册路由
 @app.post("/user/register")
@@ -76,17 +81,94 @@ def login(loginUser: LoginUser, db: Session = Depends(getSession)):
     )
     return accessToken
 
+
+# 修改用户名路由
+@app.post("/user/update-username")
+def update_username(request: UsernameUpdateRequest, db: Session = Depends(getSession)):
+    try:
+        result = updateUsername(db, request.current_username, request.new_username)
+        return {
+            "message": "Username updated successfully",
+            "username": result.username,
+            "id": result.id
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logging.error(f"修改用户名时出现未知错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"服务器错误: {str(e)}"
+        )
+
+# 修改密码路由
+@app.post("/user/update-password")
+def update_password(request: PasswordUpdateRequest, db: Session = Depends(getSession)):
+    try:
+        result = updatePassword(db, request.username, request.current_password, request.new_password)
+        return {
+            "message": "Password updated successfully",
+            "username": result.username,
+            "id": result.id
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logging.error(f"修改密码时出现未知错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"服务器错误: {str(e)}"
+        )
+
+# 获取用户信息路由
+@app.get("/user/info")
+def get_user_info(username: str, db: Session = Depends(getSession)):
+    try:
+        user = getUserByUsername(db, username)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        return {
+            "username": user.username,
+            "id": user.id
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logging.error(f"获取用户信息时出现未知错误: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"服务器错误: {str(e)}"
+        )
+
 # 手动控制流量更新任务的端点
 @app.post("/admin/flow_updates/start")
-def start_updates(interval_seconds: int = 60):
+async def start_updates(interval_seconds: int = 10):
     """启动流量更新任务"""
-    start_flow_updates(interval_seconds)
+    global update_interval, is_updating
+    update_interval = interval_seconds
+    
+    if not is_updating:
+        # 启动后台任务
+        background_task = asyncio.create_task(periodic_data_update())
+        is_updating = True
+        logging.info(f"流量更新任务已启动，更新间隔为 {interval_seconds} 秒")
+    else:
+        logging.info(f"更新间隔已修改为 {interval_seconds} 秒")
+    
     return {"message": f"流量更新任务已启动，更新间隔为 {interval_seconds} 秒"}
 
 @app.post("/admin/flow_updates/stop")
-def stop_updates():
+async def stop_updates():
     """停止流量更新任务"""
-    stop_flow_updates()
+    global is_updating
+    
+    if is_updating:
+        is_updating = False
+        logging.info("流量更新任务已停止")
+    
     return {"message": "流量更新任务已停止"}
 
 # 初始化数据生成器
@@ -111,7 +193,7 @@ class ConnectionManager:
     
     async def connect(self, websocket: WebSocket, client_type: str):
         await websocket.accept()
-        if client_type in self.active_connections:
+        if (client_type in self.active_connections):
             self.active_connections[client_type].append(websocket)
             logging.info(f"{client_type} 客户端连接成功，当前连接数: {len(self.active_connections[client_type])}")
         else:
@@ -146,8 +228,15 @@ manager = ConnectionManager()
 # 定期更新和广播数据的后台任务
 async def periodic_data_update():
     """定期更新和广播交通数据"""
-    while True:
+    global is_updating, update_interval
+    
+    logging.info(f"开始定期更新数据，间隔：{update_interval}秒")
+    
+    while is_updating:
         try:
+            start_time = time.time()
+            logging.info(f"正在更新交通数据...")
+            
             # 更新所有数据
             all_data = data_generator.update_all_data()
             timestamp = int(time.time())
@@ -212,8 +301,15 @@ async def periodic_data_update():
             if manager.active_connections["all_data"]:
                 await manager.broadcast("all_data", all_data)
             
+            # 计算处理时间
+            processing_time = time.time() - start_time
+            
+            # 确保间隔时间是准确的
+            sleep_time = max(0.1, update_interval - processing_time)
+            logging.info(f"数据更新完成，处理时间：{processing_time:.2f}秒，将在{sleep_time:.2f}秒后再次更新")
+            
             # 等待一段时间再更新
-            await asyncio.sleep(5)  # 每5秒更新一次
+            await asyncio.sleep(sleep_time)
             
         except Exception as e:
             logging.error(f"更新数据时出错: {e}")
@@ -431,4 +527,25 @@ async def get_all_data():
 # 健康检查
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "timestamp": int(time.time())}
+    return {"status": "ok", "timestamp": int(time.time()), "is_updating": is_updating, "update_interval": update_interval}
+
+# 在应用启动时自动开始数据更新任务
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时的初始化工作"""
+    global is_updating
+    
+    # 自动启动数据更新任务
+    if not is_updating:
+        is_updating = True
+        asyncio.create_task(periodic_data_update())
+        logging.info(f"应用启动时自动开始数据更新任务，间隔：{update_interval}秒")
+
+@app.on_event("shutdown") 
+async def shutdown_event():
+    """应用关闭时的清理工作"""
+    global is_updating
+    
+    # 停止数据更新任务
+    is_updating = False
+    logging.info("应用关闭，停止数据更新任务")
